@@ -21,9 +21,10 @@ using std::vector;
 
 namespace cuda
 {
-    FDK::FDK(float R, const string &filterType, const vectorFPtr &projections, int sizeX, int sizeY)
+    FDK::FDK(float R, float ds, const string &filterType, const vectorFPtr &projections, int sizeX, int sizeY)
     {
         this->_R = R;
+        this->_detectorSize = ds;
         this->_filterType = filterType;
         this->_projections = Tensor(sizeX, sizeY, projections.size());
         int layerSize = sizeX * sizeY;
@@ -46,6 +47,7 @@ namespace cuda
 
     FDK::FDK(FDK &&other)
         : _R(std::move(other._R))
+        , _detectorSize(other._detectorSize)
         , _filterType(std::move(other._filterType))
         , _projections(std::move(other._projections))
         , _plan(std::move(other._plan))
@@ -65,6 +67,7 @@ namespace cuda
     FDK &FDK::operator=(FDK &&other)
     {
         this->_R = std::move(other._R);
+        this->_detectorSize = std::move(other._detectorSize);
         this->_filterType = std::move(other._filterType);
         this->_projections = std::move(other._projections);
         this->_plan = std::move(other._plan);
@@ -161,7 +164,7 @@ namespace cuda
         // initialize pre-weights
         // w(x, y) = r / sqrt(r ** 2 + x ** 2 + y ** 2)
         _weights.setZero();
-        assignWeights(nrows, ncols, _R, _weights.getData());
+        assignWeights(nrows, ncols, _R, _detectorSize, _weights.getData());
         std::cout << "weights initialized!" << std::endl;
 
         // initialize projection weights
@@ -203,7 +206,7 @@ namespace cuda
             {
                 for (int j = 0; j < ncols; j++)
                 {
-                    float x = xHost[i * ncols + j] / 64.f, y = yHost[i * ncols + j] / 64.f;
+                    float x = xHost[i * ncols + j] * _detectorSize, y = yHost[i * ncols + j] * _detectorSize;
                     float sqrtU_1 = (_R + x * sinTheta - y * cosTheta);
                     projectionsWeightHost[k * nrows * ncols + i * ncols + j] = (_R * _R) / (sqrtU_1 * sqrtU_1 + 1e-6 * 1e-6);
                 }
@@ -263,42 +266,30 @@ namespace cuda
         auto nsteps = _projections.steps();
 
         // backprojection weighting
-        _projections = _projections * _projectionWeights;
-        std::cout << "backprojection weighted!" << std::endl;
+        // _projections = _projections * _projectionWeights;
+        // std::cout << "backprojection weighted!" << std::endl;
 
         // backprojection
         Tensor result(ncols, ncols, nrows);
+
+        // float *cosVecHost = new float[nsteps];
+        // float *sinVecHost = new float[nsteps];
+        // cudaMemcpy((void *)cosVecHost, (void *)_cosVec, nsteps * sizeof(float), cudaMemcpyDeviceToHost);
+        // cudaMemcpy((void *)sinVecHost, (void *)_sinVec, nsteps * sizeof(float), cudaMemcpyDeviceToHost);
+        // for (int step = 0; step < nsteps; step++)
+        // {
+        //     // std::cout << "\rprogress: " << std::setw(6) << std::setprecision(4) << float(step + 1) / float(nsteps) * 100.f << "%";
+        //     backprojection(nrows, nrows, ncols, step, _detectorSize, _R, result.getData(),
+        //         _projections.getData(), cosVecHost[step], sinVecHost[step], nsteps);
+        // }
+        // delete [] cosVecHost;
+        // delete [] sinVecHost;
+
         int offset = 0;
         int stride = ncols * ncols;
         std::cout << "using policy: bilinear" << std::endl;
         Tensor slice(ncols, ncols, 1);
         Tensor drawnCols(ncols, ncols, nsteps);
-        // float *cosVecHost = new float[nsteps];
-        // float *sinVecHost = new float[nsteps];
-        // float *resultHost = new float[nrows * nrows * ncols];
-        // float *projHost = new float[nrows * ncols];
-        // float *projHostAll = new float[nrows * ncols * nsteps];
-        // cudaMemcpy((void *)cosVecHost, (void *)_cosVec, nsteps * sizeof(float), cudaMemcpyDeviceToHost);
-        // cudaMemcpy((void *)sinVecHost, (void *)_sinVec, nsteps * sizeof(float), cudaMemcpyDeviceToHost);
-        // cudaMemcpy((void *)projHostAll, (void *)_projections.getData(), nsteps * nrows * ncols * sizeof(float), cudaMemcpyDeviceToHost);
-        // check(nsteps, nrows, ncols, projHostAll, "checking projection all!");
-        // for (int step = 0; step < nsteps; step++)
-        // {
-        //     std::cout << "step: " << step << '\t';
-        //     backprojection(nrows, nrows, ncols, step, 1.f, _R, result.getData(), 
-        //         _projections.getData(), cosVecHost[step], sinVecHost[step], nsteps);
-        //     // cudaMemcpy((void *)projHostAll, (void *)_projections.getData(), nsteps * nrows * ncols * sizeof(float), cudaMemcpyDeviceToHost);
-        //     // check(nsteps, nrows, ncols, projHostAll, "checking projection!");
-        // }
-        // cudaMemcpy((void *)projHostAll, (void *)_projections.getData(), nsteps * nrows * ncols * sizeof(float), cudaMemcpyDeviceToHost);
-        // check(nsteps, nrows, ncols, projHostAll, "checking projection all!");
-        // cudaMemcpy((void *)resultHost, (void *)result.getData(), nrows * nrows * ncols * sizeof(float), cudaMemcpyDeviceToHost);
-        // check(nrows, nrows, ncols, resultHost, "checking result host!");
-        // delete [] cosVecHost;
-        // delete [] sinVecHost;
-        // delete [] resultHost;
-        // delete [] projHost;
-        // delete [] projHostAll;
         check(nsteps, nrows, ncols, _projections.getData(), "Checking Porjections!");
         std::string checkTextBase = "Checking result: ";
         std::string checkText;
@@ -316,8 +307,9 @@ namespace cuda
             cudaMemcpy((result.getData() + offset), slice.getData(), stride * sizeof(float), cudaMemcpyDeviceToDevice);
             offset += stride;
         }
+
         // check(nsteps, nrows, ncols, _projections.getData(), "Checking Porjections 2!");
-        result = result * 64.f;
+        result = result / _detectorSize;
         std::cout << "\nover!" << std::endl;
         check(nrows, ncols, ncols, result.getData(), "Checking result!");
         std::cout << "result size: " << result.steps() << ", " << result.rows() << ", " << result.cols() << std::endl;

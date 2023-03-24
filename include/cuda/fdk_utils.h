@@ -9,7 +9,7 @@
 
 namespace cuda
 {
-    void assignWeights(int, int, float, float *);
+    void assignWeights(int, int, float, float, float *);
 
     void assignFFTInOut(int, int, int, cufftComplex *, float *);
 

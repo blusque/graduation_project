@@ -24,7 +24,7 @@ namespace cuda
 
     public:
         FDK() = delete;
-        explicit FDK(float R, const string &filter, const vectorFPtr &projections, int sizeX, int sizeY);
+        explicit FDK(float R, float ds, const string &filter, const vectorFPtr &projections, int sizeX, int sizeY);
         FDK(const FDK &other) = delete;
         FDK &operator=(const FDK &other) = delete;
         FDK(FDK &&other);
@@ -47,6 +47,7 @@ namespace cuda
         int _rows;
         int _cols;
         int _steps;                       // number of steps
+        float _detectorSize;
         float *_filter;
         float *_cosVec;
         float *_sinVec;

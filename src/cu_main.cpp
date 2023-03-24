@@ -13,7 +13,7 @@ int main(int argc, char *argv)
     std::vector<float *> Matrices;
     auto start = std::chrono::system_clock::now();
     std::cout << "Loading Matrices..." << std::endl;
-    cuda::readFile("../../senbai/data666.txt", Matrices);
+    cuda::readFile("../../senbai/data512.txt", Matrices);
     auto end = std::chrono::system_clock::now();
     std::cout << "time cost: "
               << std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count()
@@ -21,7 +21,8 @@ int main(int argc, char *argv)
     std::cout << "Matrices Size: " << Matrices.size() << std::endl;
 
     // on test
-    cuda::FDK fdk(44.f, "r-l", Matrices, 256, 256);
+    float detectorSize = 1.f / 64.f;
+    cuda::FDK fdk(44.f, detectorSize, "r-l", Matrices, 512, 512);
     fdk.initialize();
     fdk.weighting();
     fdk.filtering();

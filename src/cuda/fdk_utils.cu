@@ -12,14 +12,14 @@
     }\
 }\
 
-__global__ void assignWeightsDevice(int rows, int cols, float R, float *dataPtr)
+__global__ void assignWeightsDevice(int rows, int cols, float R, float ds, float *dataPtr)
 {
     int index = blockIdx.x * blockDim.x + threadIdx.x;
     int stride = blockDim.x * gridDim.x;
     for (int i = index; i < rows * cols; i += stride)
     {
-        float row = (i / cols - rows / 2 + 1) / 64.f;
-        float col = (i % cols - cols / 2 + 1) / 64.f;
+        float row = (i / cols - rows / 2 + 1) * ds;
+        float col = (i % cols - cols / 2 + 1) * ds;
         dataPtr[i] = R / sqrtf(R * R + float(row * row) + float(col * col));
     }
 }
@@ -192,7 +192,7 @@ __global__ void generateSliceDevice(int rows, int cols, int steps, float *dst, f
 }
 
 __global__ void backprojectionDevice(int rows, int cols, int steps, float dsize, float R, float *dst, float *src,
-    float cosTheta, float sinTheta, int angleNums)
+    float cosTheta, float sinTheta, int angleNums, float *count)
 {
     int index = blockIdx.x * blockDim.x + threadIdx.x;
     int stride = blockDim.x * gridDim.x;
@@ -216,10 +216,10 @@ __global__ void backprojectionDevice(int rows, int cols, int steps, float dsize,
         float y0 = floorf(yy), y1 = ceilf(yy);
         if (xx >= 0 && xx < rows && yy >= 0 && yy < cols)
         {
-            // count[i] = 1;
-            float val1 = src[int(x0) * cols + int(y0)], val2 = src[int(x1) * cols + int(y0)],
-                  val3 = src[int(x0) * cols + int(y1)], val4 = src[int(x1) * cols + int(y1)];
-            float temp = interpolate(val1, val2, val3, val4, x0, x1, y0, y1, xx, yy);
+            count[i] = 1.f;
+            float val1 = src[int(y0) * cols + int(x0)], val2 = src[int(y1) * cols + int(x0)],
+                  val3 = src[int(y0) * cols + int(x1)], val4 = src[int(y1) * cols + int(x1)];
+            float temp = interpolate(val1, val2, val3, val4, y0, y1, x0, x1, yy, xx);
             dst[i] += temp * U_1 * U_1 / float(angleNums);
         }
         else
@@ -251,10 +251,10 @@ namespace cuda
         delete [] hostPtr;
     }
 
-    void assignWeights(int rows, int cols, float R, float *result)
+    void assignWeights(int rows, int cols, float R, float ds, float *result)
     {
         int gridSize = (rows * cols) / blockSize;
-        assignWeightsDevice<<<gridSize, blockSize>>>(rows, cols, R, result);
+        assignWeightsDevice<<<gridSize, blockSize>>>(rows, cols, R, ds, result);
     }
 
     void dataCopy(int steps, int rows, int cols, cufftComplex *complexData, float *floatData, int direction)
@@ -330,11 +330,11 @@ namespace cuda
     void backprojection(int steps, int rows, int cols, int step, float dsize, float R, 
         float *dst, float *src, float cosTheta, float sinTheta, int angles)
     {
-        int *count;
-        cudaMalloc((void **)&count, steps * rows * cols * sizeof(int));
+        Tensor count(rows, cols, steps);
+        count.setZero();
+        std::string checkText = "check count: " + std::to_string(step);
         float *startPtr = src + cols * rows * step;
-        backprojectionDevice<<<rows * steps, cols>>>(rows, cols, steps, dsize, R, dst, startPtr, cosTheta, sinTheta, angles);
-        cudaFree(count);
-        count = nullptr;
+        backprojectionDevice<<<rows * steps, cols>>>(rows, cols, steps, dsize, R, dst, startPtr, cosTheta, sinTheta, angles, count.getData());
+        check(steps, rows, cols, count.getData(), checkText);
     }
 }

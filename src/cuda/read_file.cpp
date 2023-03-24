@@ -154,7 +154,7 @@ namespace cuda
         int index = 0;
         int len = 0;
         const char *startBuf = pMapData;
-        std::cout << "Read Finished" << std::endl;
+        std::cout << "Load Finished" << std::endl;
         float *mat;
         int nrow = 0, ncol = 0;
         auto sizeTheta = 0;
@@ -212,8 +212,11 @@ namespace cuda
             }
             // std::cout << "line:\n" << line << std::endl;
             index++;
+            std::cout << "\rprogress: " << std::setw(6) << std::setprecision(4) 
+                << float(index) / float((sizeY + 1) * sizeTheta) * 100.f << "%";
             pBuf = startBuf;
         }
+        std::cout << '\n';
         // 撤销文件视图
         UnmapViewOfFile(pBuf);
         // 关闭映射文件句柄

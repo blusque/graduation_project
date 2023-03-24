@@ -1,5 +1,7 @@
 #include "cuda/tensor_utils.h"
 
+#define blockSize 128
+
 __global__ void setZeroDevice(int rows, int cols, int steps, float *dataPtr)
 {
     int index = blockIdx.x * blockDim.x + threadIdx.x;
@@ -155,68 +157,81 @@ namespace cuda
 {
     void setZeroFunc(int rows, int cols, int steps, float *dataPtr)
     {
-        setZeroDevice<<<32, 1024>>>(rows, cols, steps, dataPtr);
+        int gridSize = (steps * rows * cols) / blockSize;
+        setZeroDevice<<<gridSize, blockSize>>>(rows, cols, steps, dataPtr);
     }
 
     void setConstantFunc(int rows, int cols, int steps, float *dataPtr, float constant)
     {
-        setConstantDevice<<<rows, cols>>>(rows, cols, steps, dataPtr, constant);
+        int gridSize = (steps * rows * cols) / blockSize;
+        setConstantDevice<<<gridSize, blockSize>>>(rows, cols, steps, dataPtr, constant);
     }
 
     void setIdentityFunc(int rows, int cols, int steps, float *dataPtr)
     {
-        setIdentityDevice<<<rows, cols>>>(rows, cols, steps, dataPtr);
+        int gridSize = (steps * rows * cols) / blockSize;
+        setIdentityDevice<<<gridSize, blockSize>>>(rows, cols, steps, dataPtr);
     }
 
     float getElement(int rows, int cols, int steps, int rowIndex, int colIndex, int stepIndex, float *dataPtr)
     {
+        int gridSize = (steps * rows * cols) / blockSize;
         float result;
-        getElementDevice<<<rows, cols>>>(rows, cols, steps, rowIndex, colIndex, stepIndex, dataPtr, result);
+        getElementDevice<<<gridSize, blockSize>>>(rows, cols, steps, rowIndex, colIndex, stepIndex, dataPtr, result);
         return result;
     }
 
     void setElement(int rows, int cols, int steps, int rowIndex, int colIndex, int stepIndex, float *dataPtr, float num)
     {
-        setElementDevice<<<rows, cols>>>(rows, cols, steps, rowIndex, colIndex, stepIndex, dataPtr, num);
+        int gridSize = (steps * rows * cols) / blockSize;
+        setElementDevice<<<gridSize, blockSize>>>(rows, cols, steps, rowIndex, colIndex, stepIndex, dataPtr, num);
     }
 
     void add(int rows, int cols, int steps, float *dataPtrL, float *dataPtrR, float *result)
     {
-        addDevice<<<rows, cols>>>(rows, cols, steps, dataPtrL, dataPtrR, result);
+        int gridSize = (steps * rows * cols) / blockSize;
+        addDevice<<<gridSize, blockSize>>>(rows, cols, steps, dataPtrL, dataPtrR, result);
     }
 
     void add(int rows, int cols, int steps, float *dataPtr, float num, float *result)
     {
-        addDevice<<<rows, cols>>>(rows, cols, steps, dataPtr, num, result);
+        int gridSize = (steps * rows * cols) / blockSize;
+        addDevice<<<gridSize, blockSize>>>(rows, cols, steps, dataPtr, num, result);
     }
 
     void minus(int rows, int cols, int steps, float *dataPtrL, float *dataPtrR, float *result)
     {
-        minusDevice<<<rows, cols>>>(rows, cols, steps, dataPtrL, dataPtrR, result);
+        int gridSize = (steps * rows * cols) / blockSize;
+        minusDevice<<<gridSize, blockSize>>>(rows, cols, steps, dataPtrL, dataPtrR, result);
     }
 
     void dividedByNumber(int rows, int cols, int steps, float *dataPtr, float num, float *result)
     {
-        dividedByNumberDevice<<<rows, cols>>>(rows, cols, steps, dataPtr, num, result);
+        int gridSize = (steps * rows * cols) / blockSize;
+        dividedByNumberDevice<<<gridSize, blockSize>>>(rows, cols, steps, dataPtr, num, result);
     }
 
     void multiply(int rows, int cols, int steps, float *dataPtrL, float *dataPtrR, float *result)
     {
-        multiplyDevice<<<rows, cols>>>(rows, cols, steps, dataPtrL, dataPtrR, result);
+        int gridSize = (steps * rows * cols) / blockSize;
+        multiplyDevice<<<gridSize, blockSize>>>(rows, cols, steps, dataPtrL, dataPtrR, result);
     }
 
     void multiply(int rows, int cols, int steps, float *dataPtr, float value, float *result)
     {
-        multiplyDevice<<<rows, cols>>>(rows, cols, steps, dataPtr, value, result);
+        int gridSize = (steps * rows * cols) / blockSize;
+        multiplyDevice<<<gridSize, blockSize>>>(rows, cols, steps, dataPtr, value, result);
     }
 
     void multiplyBroadcast(int rows, int cols, int steps, float *dataPtrL, float *dataPtrR, float *result)
     {
-        multiplyBroadcastDevice<<<rows, cols>>>(rows, cols, steps, dataPtrL, dataPtrR, result);
+        int gridSize = (steps * rows * cols) / blockSize;
+        multiplyBroadcastDevice<<<gridSize, blockSize>>>(rows, cols, steps, dataPtrL, dataPtrR, result);
     }
 
     void divide(int rows, int cols, int steps, float *dataPtrL, float *dataPtrR, float *result)
     {
-        divideDevice<<<rows, cols>>>(rows, cols, steps, dataPtrL, dataPtrR, result);
+        int gridSize = (steps * rows * cols) / blockSize;
+        divideDevice<<<gridSize, blockSize>>>(rows, cols, steps, dataPtrL, dataPtrR, result);
     }
 }
