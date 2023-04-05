@@ -12,9 +12,7 @@
  *
  */
 namespace cuda
-{
-    void check(int nsteps, int nrows, int ncols, float *devPtr, const std::string &text);
-    
+{   
     class FDK
     {
     public:
@@ -27,8 +25,8 @@ namespace cuda
         explicit FDK(float R, float ds, const string &filter, const vectorFPtr &projections, int sizeX, int sizeY);
         FDK(const FDK &other) = delete;
         FDK &operator=(const FDK &other) = delete;
-        FDK(FDK &&other);
-        FDK &operator=(FDK &&other);
+        FDK(FDK &&other) = delete;
+        FDK &operator=(FDK &&other) = delete;
 
         ~FDK();
 
@@ -49,8 +47,6 @@ namespace cuda
         int _steps;                       // number of steps
         float _detectorSize;
         float *_filter;
-        float *_cosVec;
-        float *_sinVec;
         cufftHandle _plan;                // the fft/ifft plan
         cufftComplex *_fftInOut;          // the data array
 

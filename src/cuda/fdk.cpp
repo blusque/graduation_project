@@ -22,11 +22,13 @@ using std::vector;
 namespace cuda
 {
     FDK::FDK(float R, float ds, const string &filterType, const vectorFPtr &projections, int sizeX, int sizeY)
+        : _R(R)
+        , _detectorSize(ds)
+        , _filterType(filterType)
+        , _projections(sizeX, sizeY, projections.size())
+        , _projectionWeights(sizeX, sizeY, projections.size())
+        , _weights(sizeX, sizeY, 1)
     {
-        this->_R = R;
-        this->_detectorSize = ds;
-        this->_filterType = filterType;
-        this->_projections = Tensor(sizeX, sizeY, projections.size());
         int layerSize = sizeX * sizeY;
         int nrows = sizeX;
         int ncols = sizeY;
@@ -37,68 +39,21 @@ namespace cuda
             float *dstPtr = this->_projections.getData() + offset;
             cudaMemcpy((void *)dstPtr, (void *)projections[i], layerSize * sizeof(float), cudaMemcpyHostToDevice);
         }
-        this->_projectionWeights = Tensor(sizeX, sizeY, projections.size());
-        this->_weights = Tensor(nrows, ncols, 1);
-        cudaMalloc((void **)&_fftInOut, sizeof(float) * ncols * nrows * nsteps);
-        cudaMalloc((void **)&_filter, ncols * sizeof(float));
-        cudaMalloc((void **)&_sinVec, nsteps * sizeof(float));
-        cudaMalloc((void **)&_cosVec, nsteps * sizeof(float));
-    }
-
-    FDK::FDK(FDK &&other)
-        : _R(std::move(other._R))
-        , _detectorSize(other._detectorSize)
-        , _filterType(std::move(other._filterType))
-        , _projections(std::move(other._projections))
-        , _plan(std::move(other._plan))
-        , _weights(std::move(other._weights))
-        , _projectionWeights(std::move(other._projectionWeights))
-    {
-        this->_filter = other._filter;
-        other._filter = nullptr;
-        this->_cosVec = other._cosVec;
-        other._cosVec = nullptr;
-        this->_sinVec = other._sinVec;
-        other._sinVec = nullptr;
-        this->_fftInOut = other._fftInOut;
-        other._fftInOut = nullptr;
-    }
-
-    FDK &FDK::operator=(FDK &&other)
-    {
-        this->_R = std::move(other._R);
-        this->_detectorSize = std::move(other._detectorSize);
-        this->_filterType = std::move(other._filterType);
-        this->_projections = std::move(other._projections);
-        this->_plan = std::move(other._plan);
-        this->_weights = std::move(other._weights);
-        this->_projectionWeights = std::move(other._projectionWeights);
-        this->_filter = other._filter;
-        other._filter = nullptr;
-        this->_cosVec = other._cosVec;
-        other._cosVec = nullptr;
-        this->_sinVec = other._sinVec;
-        other._sinVec = nullptr;
-        this->_fftInOut = other._fftInOut;
-        other._fftInOut = nullptr;
-        return *this;
+        cudaMalloc((void **)&_fftInOut, sizeof(cufftComplex) * ncols * nrows * nsteps);
+        cudaMalloc((void **)&_filter, nrows * sizeof(float));
     }
 
     FDK::~FDK()
     {
         cudaFree(this->_filter);
         this->_filter = nullptr;
-        cudaFree(this->_cosVec);
-        this->_cosVec = nullptr;
-        cudaFree(this->_sinVec);
-        this->_sinVec = nullptr;
         cudaFree(this->_fftInOut);
         this->_fftInOut = nullptr;
     }
 
     void FDK::linspace(float start, float end, int steps, float *vec)
     {
-        try 
+        try
         {
             int len = _msize(vec) / sizeof(float);
             if (len != steps)
@@ -122,6 +77,7 @@ namespace cuda
 
     void FDK::initialize()
     {
+        // _projections.transpose();
         // initialize filter
         auto nrows = _projections.rows();
         auto ncols = _projections.cols();
@@ -149,7 +105,7 @@ namespace cuda
             {
                 filterHost[i] /= std::max(std::abs(start), std::abs(end));
             }
-            
+
             std::cout << "filter size: " << ncols << std::endl;
         }
         else if (_filterType == "s-l")
@@ -157,7 +113,7 @@ namespace cuda
             // s-l filter
         }
         cudaMemcpy((void *)_filter, (void *)filterHost, ncols * sizeof(float), cudaMemcpyHostToDevice);
-        delete [] filterHost;
+        delete[] filterHost;
         filterHost = nullptr;
         std::cout << "filter initialized!" << std::endl;
 
@@ -179,11 +135,13 @@ namespace cuda
             cosVecHost[i] = std::cos(thetaVec[i]);
             sinVecHost[i] = std::sin(thetaVec[i]);
         }
-        cudaMemcpy(_cosVec, cosVecHost, sizeof(float) * nsteps, cudaMemcpyHostToDevice);
-        cudaMemcpy(_sinVec, sinVecHost, sizeof(float) * nsteps, cudaMemcpyHostToDevice);
+        // cudaMemcpy(_cosVec, cosVecHost, sizeof(float) * nsteps, cudaMemcpyHostToDevice);
+        // cudaMemcpy(_sinVec, sinVecHost, sizeof(float) * nsteps, cudaMemcpyHostToDevice);
+        CUDA_CHECK(assignCosVec(cosVecHost, nsteps * sizeof(float)));
+        CUDA_CHECK(assignSinVec(sinVecHost, nsteps * sizeof(float)));
         free(thetaVec);
         thetaVec = nullptr;
-        
+
         float *xHost, *yHost;
         xHost = (float *)malloc(sizeof(float) * nrows * ncols);
         yHost = (float *)malloc(sizeof(float) * nrows * ncols);
@@ -212,8 +170,8 @@ namespace cuda
                 }
             }
         }
-        cudaMemcpy((void *)_projectionWeights.getData(), (void *)projectionsWeightHost, 
-            nsteps * ncols * nrows * sizeof(float), cudaMemcpyHostToDevice);
+        cudaMemcpy((void *)_projectionWeights.getData(), (void *)projectionsWeightHost,
+                   nsteps * ncols * nrows * sizeof(float), cudaMemcpyHostToDevice);
         std::cout << "projection weights initialized!" << std::endl;
         free(xHost);
         xHost = nullptr;
@@ -223,17 +181,15 @@ namespace cuda
         cosVecHost = nullptr;
         free(sinVecHost);
         sinVecHost = nullptr;
-        delete [] projectionsWeightHost;
+        delete[] projectionsWeightHost;
         projectionsWeightHost = nullptr;
 
         // initialize FFTW plan
-        cudaFree(_fftInOut);
-        cudaMalloc((void **)&_fftInOut, sizeof(float) * ncols * nrows * nsteps);
         int n[1] = {ncols};
         int inembed[1] = {nrows * ncols * nsteps};
         int onembed[1] = {nrows * ncols * nsteps};
-        cufftPlanMany(&_plan, 1, n, inembed, 1, ncols, 
-            onembed, 1, ncols, CUFFT_C2C, nrows * nsteps);
+        cufftPlanMany(&_plan, 1, n, inembed, 1, ncols,
+                      onembed, 1, ncols, CUFFT_C2C, nrows * nsteps);
         std::cout << "fft plan initialized!" << std::endl;
     }
 
@@ -259,15 +215,17 @@ namespace cuda
         std::cout << "filtered!" << std::endl;
     }
 
+#include <nvtx3/nvToolsExt.h>
     Tensor FDK::backprojecting()
     {
+        nvtxRangePushA(__FUNCTION__);
         auto nrows = _projections.rows();
         auto ncols = _projections.cols();
         auto nsteps = _projections.steps();
 
         // backprojection weighting
-        // _projections = _projections * _projectionWeights;
-        // std::cout << "backprojection weighted!" << std::endl;
+        _projections = _projections * _projectionWeights;
+        std::cout << "backprojection weighted!" << std::endl;
 
         // backprojection
         Tensor result(ncols, ncols, nrows);
@@ -290,29 +248,41 @@ namespace cuda
         std::cout << "using policy: bilinear" << std::endl;
         Tensor slice(ncols, ncols, 1);
         Tensor drawnCols(ncols, ncols, nsteps);
-        check(nsteps, nrows, ncols, _projections.getData(), "Checking Porjections!");
+        Tensor temp(nrows, ncols, nsteps);
+        // check(nsteps, nrows, ncols, _projections.getData(), "Checking Porjections!");
         std::string checkTextBase = "Checking result: ";
         std::string checkText;
+        auto start = std::chrono::steady_clock::now();
         for (int row = 0; row < nrows; row++)
         {
             std::cout << "\rprogress: " << std::setw(6) << std::setprecision(4) << float(row + 1) / float(nrows) * 100.f << "%";
             // generate slice[row]
+            nvtxRangePushA("slice setZero");
             slice.setZero();
+            nvtxRangePop();
+            nvtxRangePushA("draw setZero");
             drawnCols.setZero();
+            nvtxRangePop();
+            nvtxRangePushA("temp setZero");
+            temp.setZero();
+            nvtxRangePop();
             // checkText = checkTextBase + std::to_string(row);
             drawColumns(nsteps, nrows, ncols, row, drawnCols.getData(), _projections.getData());
             // check(nsteps, ncols, ncols, drawnCols.getData(), checkText);
-            rotate(nsteps, nrows, ncols, row, drawnCols.getData(), _cosVec, _sinVec);
+            rotate(nsteps, nrows, ncols, row, drawnCols.getData(), temp.getData());
             generateSlice(nsteps, ncols, ncols, slice.getData(), drawnCols.getData());
             cudaMemcpy((result.getData() + offset), slice.getData(), stride * sizeof(float), cudaMemcpyDeviceToDevice);
             offset += stride;
         }
-
+        auto end = std::chrono::steady_clock::now();
+        std::cout << '\n';
         // check(nsteps, nrows, ncols, _projections.getData(), "Checking Porjections 2!");
         result = result / _detectorSize;
-        std::cout << "\nover!" << std::endl;
-        check(nrows, ncols, ncols, result.getData(), "Checking result!");
+        std::cout << "over!" << std::endl;
+        // check(nrows, ncols, ncols, result.getData(), "Checking result!");
         std::cout << "result size: " << result.steps() << ", " << result.rows() << ", " << result.cols() << std::endl;
+        std::cout << "back projection time cost: " << std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count() << std::endl;
+        nvtxRangePop();
         return result;
     }
 }

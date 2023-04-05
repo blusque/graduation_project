@@ -146,10 +146,56 @@ __global__ void divideDevice(int rows, int cols, int steps, float *dataPtrL, flo
 {
     int index = blockIdx.x * blockDim.x + threadIdx.x;
     int stride = gridDim.x * blockDim.x;
-    for (int i = index; i < rows * cols; i += stride)
+    for (int i = index; i < rows * cols * steps; i += stride)
     {
         result[i] = dataPtrL[i] / dataPtrR[i];
         // dataPtrL[i] /= dataPtrR[i];
+    }
+}
+
+__device__ void swap(float &a, float &b)
+{
+    float tmp = a;
+    a = b;
+    b = tmp;
+}
+
+__global__ void transpose01Device(int rows, int cols, int steps, float *src, float *dst)
+{
+    int index = blockIdx.x * blockDim.x + threadIdx.x;
+    int stride = gridDim.x * blockDim.x;
+    for (int i = index; i < rows * cols * steps; i += stride)
+    {
+        int j = i / (rows * cols);
+        int k = i % (rows * cols) / cols;
+        int c = i % cols;
+        swap(src[i], dst[k * steps * cols + j * cols + c]);
+    }
+}
+
+__global__ void transpose12Device(int rows, int cols, int steps, float *src, float *dst)
+{
+    int index = blockIdx.x * blockDim.x + threadIdx.x;
+    int stride = gridDim.x * blockDim.x;
+    for (int i = index; i < rows * cols * steps; i += stride)
+    {
+        int c = i / (rows * cols);
+        int j = i % (rows * cols) / cols;
+        int k = i % cols;
+        swap(src[i], dst[c * rows * cols + k * rows + j]);
+    }
+}
+
+__global__ void transpose02Device(int rows, int cols, int steps, float *src, float *dst)
+{
+    int index = blockIdx.x * blockDim.x + threadIdx.x;
+    int stride = gridDim.x * blockDim.x;
+    for (int i = index; i < rows * cols * steps; i += stride)
+    {
+        int j = i / (rows * cols);
+        int c = i % (rows * cols) / cols;
+        int k = i % cols;
+        swap(src[i], dst[k * rows * steps + c * steps + j]);
     }
 }
 
@@ -233,5 +279,22 @@ namespace cuda
     {
         int gridSize = (steps * rows * cols) / blockSize;
         divideDevice<<<gridSize, blockSize>>>(rows, cols, steps, dataPtrL, dataPtrR, result);
+    }
+
+    void transposeFunc(int rows, int cols, int steps, float *src, float *dst, size_t dim0, size_t dim1)
+    {
+        int gridSize = (steps * rows * cols) / blockSize;
+        if ((dim0 == 0 && dim1 == 1) || (dim0 == 1 && dim1 == 0))
+        {
+            transpose01Device<<<gridSize, blockSize>>>(rows, cols, steps, src, dst);
+        }
+        else if ((dim0 == 1 && dim1 == 2) || (dim0 == 2 && dim1 == 1))
+        {
+            transpose12Device<<<gridSize, blockSize>>>(rows, cols, steps, src, dst);
+        }
+        else if ((dim0 == 2 && dim1 == 0) || (dim0 == 0 && dim1 == 2))
+        {
+            transpose02Device<<<gridSize, blockSize>>>(rows, cols, steps, src, dst);
+        }
     }
 }

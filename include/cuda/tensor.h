@@ -23,7 +23,6 @@ namespace cuda
         size_t _byteSize;
         float *_dataDev; // data pointer on device, which is a row-major Tensor
         int _gpuNums{1};
-        cublasHandle_t *_handles;
 
     public:
         cudaError_t download(float *dataHost);
@@ -74,5 +73,7 @@ namespace cuda
         friend Tensor operator-(float lValue, const Tensor &rValue);
 
         cublasStatus_t matmul(const Tensor &rValue, int step);
+
+        void Tensor::transpose(int dim0 = 1, int dim1 = 2);
     };
 }

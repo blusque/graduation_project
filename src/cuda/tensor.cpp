@@ -11,7 +11,12 @@ namespace cuda
         _cols = colSize;
         _steps = stepSize;
         _byteSize = sizeof(float) * _rows * _cols * _steps;
-        cudaMalloc((void **)&_dataDev, _byteSize);
+        cudaError_t state = cudaMalloc((void **)&_dataDev, _byteSize);
+        if (state != cudaSuccess)
+        {
+            std::cout << "cudaMalloc failed! Error Num: " << state << std::endl;
+        }
+        std::cout << "tensor allocated!" << std::endl;
         setZero();
     }
 
@@ -21,13 +26,12 @@ namespace cuda
         _cols = colSize;
         _steps = stepSize;
         _byteSize = sizeof(float) * _rows * _cols * _steps;
-        cudaMalloc((void **)&_dataDev, _byteSize);
-        cudaMemcpy((void *)_dataDev, (void *)data, _byteSize, cudaMemcpyHostToDevice);
-        _handles = (cublasHandle_t *)std::malloc(_gpuNums * sizeof(cublasHandle_t));
-        for (int i = 0; i < _gpuNums; i++)
+        cudaError_t state = cudaMalloc((void **)&_dataDev, _byteSize);
+        if (state != cudaSuccess)
         {
-            cublasCreate_v2(&(_handles[i]));
+            std::cout << "cudaMalloc failed! Error Num: " << state << std::endl;
         }
+        cudaMemcpy((void *)_dataDev, (void *)data, _byteSize, cudaMemcpyHostToDevice);
     }
 
     Tensor::Tensor(const Tensor &other)
@@ -35,30 +39,59 @@ namespace cuda
         , _cols(other._cols)
         , _steps(other._steps)
         , _byteSize(other._byteSize)
-        , _handles(other._handles)
         , _gpuNums(other._gpuNums)
     {
-        cudaMalloc((void **)&_dataDev, _byteSize);
+        std::cout << "Tensor copying!" << std::endl;
+        if (_dataDev != nullptr)
+            cudaFree(_dataDev);
+        cudaError_t state = cudaMalloc((void **)&_dataDev, _byteSize);
+        if (state != cudaSuccess)
+        {
+            std::cout << "cudaMalloc failed! Error Num: " << state << std::endl;
+        }
         cudaMemcpy((void *)_dataDev, (void *)other._dataDev, _byteSize, cudaMemcpyDeviceToDevice);
+        std::cout << "Tensor copied!" << std::endl;
     }
 
     Tensor &Tensor::operator=(const Tensor &other)
     {
-        _rows = other._rows;
-        _cols = other._cols;
-        _steps = other._steps;
-        _byteSize = other._byteSize;
-        _handles = other._handles;
-        _gpuNums = other._gpuNums;
-        cudaMalloc((void **)&_dataDev, _byteSize);
-        cudaMemcpy((void *)_dataDev, (void *)other._dataDev, _byteSize, cudaMemcpyDeviceToDevice);
+        std::cout << "Tensor assigning!" << std::endl;
+        if (this != &other && _dataDev != other._dataDev)
+        {
+            _rows = other._rows;
+            _cols = other._cols;
+            _steps = other._steps;
+            _byteSize = other._byteSize;
+            _gpuNums = other._gpuNums;
+            cudaError_t state;
+            if (_dataDev != nullptr)
+            {
+                state = cudaFree(_dataDev);
+                if (state != cudaSuccess)
+                {
+                    std::cout << "cudaMalloc failed! Error Num: " << state << std::endl;
+                }
+                std::cout << "Tensor freed!" << std::endl;
+            }
+            state = cudaMalloc((void **)&_dataDev, _byteSize);
+            if (state != cudaSuccess)
+            {
+                std::cout << "cudaMalloc failed! Error Num: " << state << std::endl;
+            }
+            std::cout << "Tensor reallocated!" << std::endl;
+            cudaMemcpy((void *)_dataDev, (void *)other._dataDev, _byteSize, cudaMemcpyDeviceToDevice);
+        }
+        std::cout << "Tensor assigned!" << std::endl; 
         return *this;
     }
 
     Tensor::~Tensor()
     {
-        cudaFree(_dataDev);
-        _dataDev = nullptr;
+        if (_dataDev != nullptr)
+        {
+            cudaFree(_dataDev);
+            _dataDev = nullptr;
+        }
     }
 
     cudaError_t Tensor::download(float *dataHost)
@@ -206,10 +239,12 @@ namespace cuda
 
     cublasStatus_t Tensor::matmul(const Tensor &rValue, int step)
     {
+        cublasHandle_t handle;
+        cublasCreate_v2(&handle);
         float alpha = 1.f;
         float beta = 0.f;
         auto status = cublasSgemm_v2(
-            _handles[0],
+            handle,
             CUBLAS_OP_N,
             CUBLAS_OP_N,
             _cols,
@@ -224,5 +259,28 @@ namespace cuda
             _dataDev,
             _cols);
         return status;
+    }
+
+    void Tensor::transpose(int dim0, int dim1)
+    {
+        transposeFunc(_rows, _cols, _steps, _dataDev, _dataDev, dim0, dim1);
+        if ((dim0 == 0 && dim1 == 1) || (dim0 == 1 && dim1 == 0))
+        {
+            size_t tmp = _steps;
+            _steps = _rows;
+            _rows = tmp;
+        }
+        else if ((dim0 == 1 && dim1 == 2) || (dim0 == 2 && dim1 == 1))
+        {
+            size_t tmp = _cols;
+            _cols = _rows;
+            _rows = tmp;
+        }
+        else if ((dim0 == 2 && dim1 == 0) || (dim0 == 0 && dim1 == 2))
+        {
+            size_t tmp = _steps;
+            _steps = _cols;
+            _cols = tmp;
+        }
     }
 }

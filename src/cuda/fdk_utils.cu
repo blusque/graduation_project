@@ -4,15 +4,16 @@
 #include <iostream>
 
 #include <cufft.h>
+#include <nvtx3/nvToolsExt.h>
 #define PI 3.1416
 #define blockSize 128
-#define CUDA_CHECK(status) {\
-    if (status != cudaSuccess) {\
-        printf("Error: %s\n", cudaGetErrorString(status));\
-    }\
-}\
+#define THETA_SIZE 3600
 
-__global__ void assignWeightsDevice(int rows, int cols, float R, float ds, float *dataPtr)
+__constant__ float cosVec[THETA_SIZE] = {0.f};
+__constant__ float sinVec[THETA_SIZE] = {0.f};
+
+__global__ void
+assignWeightsDevice(int rows, int cols, float R, float ds, float *dataPtr)
 {
     int index = blockIdx.x * blockDim.x + threadIdx.x;
     int stride = blockDim.x * gridDim.x;
@@ -59,7 +60,7 @@ __global__ void executeFilterDevice(int rows, int cols, int steps, cufftComplex 
 }
 
 __global__ void computeProjectionWeightsDevice(int rows, int cols, int steps, float R, float *x, float *y,
-                                                   float *cosVec, float *sinVec, float *dataPtr)
+                                               float *cosVec, float *sinVec, float *dataPtr)
 {
     int index = blockIdx.x * blockDim.x + threadIdx.x;
     int stride = blockDim.x * gridDim.x;
@@ -84,67 +85,35 @@ __global__ void drawColumnsDevice(int rows, int cols, int steps, int dist, float
         int step = i / dist;
         // int srcIndex = step * dist + i % rows * cols;
         int srcIndex = step * dist + i % cols;
-        dst[dstIndex] += src[srcIndex];
+        // dst[dstIndex] += src[srcIndex];
+        dst[dstIndex] = __fadd_rn(dst[dstIndex], src[srcIndex]);
     }
 }
 
-
 /**
  * @brief bilinear interpolate function on device
- * 
+ *
  *
  * @param val1 input(x0, y0)
  * @param val2 input(x1, y0)
  * @param val3 input(x0, y1)
  * @param val4 input(x1, y1)
- * @param x0 
- * @param x1 
- * @param y0 
- * @param y1 
- * @param x 
- * @param y 
- * @param result 
- * @return 
+ * @param x0
+ * @param x1
+ * @param y0
+ * @param y1
+ * @param x
+ * @param y
+ * @param result
+ * @return
  */
-__device__ float interpolate(float val1, float val2, float val3, float val4, 
-                            float x0, float x1, float y0, float y1, float x, float y)
+__device__ float interpolate(float val1, float val2, float val3, float val4,
+                             float x0, float x1, float y0, float y1, float x, float y)
 {
-    return val1 * (x1 - x) * (y1 - y) + val2 * (x - x0) * (y1 - y) + val3 * (x1 - x) * (y - y0)
-        + val4 * (x - x0) * (y - y0);
+    return val1 * (x1 - x) * (y1 - y) + val2 * (x - x0) * (y1 - y) + val3 * (x1 - x) * (y - y0) + val4 * (x - x0) * (y - y0);
 }
 
-__global__ void rotateDevice(int rows, int cols, int steps, int step, float *dst, float *src, 
-    float *cosVec, float *sinVec)
-{
-    int index = blockIdx.x * blockDim.x + threadIdx.x;
-    int stride = blockDim.x * gridDim.x;
-    float cosTheta = cosVec[step];
-    float sinTheta = sinVec[step];
-    float centerX = cols / 2 + 1;
-    float centerY = rows / 2 + 1;
-    for (int i = index; i < rows * cols * steps; i += stride)
-    {
-        float x = float(i / cols);
-        float y = float(i % cols);
-        float rotateX = (x - centerX) * cosTheta - (y - centerY) * sinTheta + centerX;
-        float rotateY = (x - centerX) * sinTheta + (y - centerY) * cosTheta + centerY;
-        float x0 = floorf(rotateX), x1 = ceilf(rotateX), 
-              y0 = floorf(rotateY), y1 = ceilf(rotateY);
-        if (rotateX >= 0 && rotateY >= 0 && rotateX < rows && rotateY < cols)
-        {
-            float val1 = src[int(x0) * cols + int(y0)], val2 = src[int(x1) * cols + int(y0)],
-                  val3 = src[int(x0) * cols + int(y1)], val4 = src[int(x1) * cols + int(y1)];
-            dst[i] = interpolate(val1, val2, val3, val4, x0, x1, y0, y1, rotateX, rotateY);
-        }
-        else
-        {
-            dst[i] = dst[i];
-        }
-    }
-}
-
-__global__ void rotateDevice(int rows, int cols, int steps, float *dst, float *src, 
-    float *cosVec, float *sinVec)
+__global__ void rotateDevice(int rows, int cols, int steps, float *dst, float *src)
 {
     int index = blockIdx.x * blockDim.x + threadIdx.x;
     int stride = blockDim.x * gridDim.x;
@@ -159,8 +128,12 @@ __global__ void rotateDevice(int rows, int cols, int steps, float *dst, float *s
         float sinTheta = cosVec[step];
         // float cosTheta = cosVec[step];
         // float sinTheta = sinVec[step];
-        float rotateX = (x - centerX) * cosTheta - (y - centerY) * sinTheta + centerX;
-        float rotateY = (x - centerX) * sinTheta + (y - centerY) * cosTheta + centerY;
+        float rotateX = __fmaf_rn(__fadd_rn(x, -centerX), cosTheta,
+                                   __fmaf_rn(-__fadd_rn(y, -centerY), sinTheta, centerX));
+        float rotateY = __fmaf_rn(__fadd_rn(x, -centerX), sinTheta,
+                                   __fmaf_rn(__fadd_rn(y, -centerY), cosTheta, centerY));
+        // float rotateX = (x - centerX) * cosTheta - (y - centerY) * sinTheta + centerX;
+        // float rotateY = (x - centerX) * sinTheta + (y - centerY) * cosTheta + centerY;
         float x0 = floorf(rotateX), x1 = ceilf(rotateX),
               y0 = floorf(rotateY), y1 = ceilf(rotateY);
         if (rotateX >= 0 && rotateY >= 0 && rotateX < rows - 1 && rotateY < cols - 1)
@@ -182,17 +155,18 @@ __global__ void generateSliceDevice(int rows, int cols, int steps, float *dst, f
 {
     int index = blockIdx.x * blockDim.x + threadIdx.x;
     int stride = blockDim.x * gridDim.x;
-    float steps_1 = 1.f / float(steps);
+    float steps_1 = __frcp_rn(steps);
     for (int i = index; i < rows * cols * steps; i += stride)
     {
         int dstIndex = i % (rows * cols);
         int srcIndex = i;
-        dst[dstIndex] += src[srcIndex] * steps_1;
+        // dst[dstIndex] += src[srcIndex] * steps_1;
+        dst[dstIndex] = __fmaf_rn(src[srcIndex], steps_1, dst[dstIndex]);
     }
 }
 
 __global__ void backprojectionDevice(int rows, int cols, int steps, float dsize, float R, float *dst, float *src,
-    float cosTheta, float sinTheta, int angleNums, float *count)
+                                     float cosTheta, float sinTheta, int angleNums, float *count)
 {
     int index = blockIdx.x * blockDim.x + threadIdx.x;
     int stride = blockDim.x * gridDim.x;
@@ -231,10 +205,10 @@ __global__ void backprojectionDevice(int rows, int cols, int steps, float dsize,
 
 namespace cuda
 {
-    void check(int nsteps, int nrows, int ncols, float *devPtr, const std::string &text = "checking!")
+    void check(int nsteps, int nrows, int ncols, float *devPtr, const std::string &text, bool output)
     {
         float *hostPtr = new float[nsteps * nrows * ncols];
-        cudaMemcpy(hostPtr, devPtr, nsteps * nrows * ncols * sizeof(float), cudaMemcpyDeviceToHost);
+        CUDA_CHECK(cudaMemcpy(hostPtr, devPtr, nsteps * nrows * ncols * sizeof(float), cudaMemcpyDeviceToHost));
         int num = 0;
         std::cout << text << std::endl;
         for (int i = 0; i < nsteps * nrows * ncols; i++)
@@ -242,19 +216,33 @@ namespace cuda
             if (std::abs(hostPtr[i]) > 1e-15)
             {
                 num++;
-                // std::cout << "position: " << i / (nrows * ncols) << ", " << (i % (nrows * ncols)) / ncols
-                //           << ", " << (i % (nrows * ncols)) % ncols << '\t';
-                // std::cout << "value: " << hostPtr[i] << '\n';
+                if (output)
+                {
+                    std::cout << "position: " << i / (nrows * ncols) << ", " << (i % (nrows * ncols)) / ncols
+                              << ", " << (i % (nrows * ncols)) % ncols << '\t';
+                    std::cout << "value: " << hostPtr[i] << '\n';
+                }
             }
         }
         std::cout << "Total: " << num << " none-zero nums!\n";
-        delete [] hostPtr;
+        delete[] hostPtr;
     }
 
     void assignWeights(int rows, int cols, float R, float ds, float *result)
     {
         int gridSize = (rows * cols) / blockSize;
         assignWeightsDevice<<<gridSize, blockSize>>>(rows, cols, R, ds, result);
+        // CUDA_SYNC();
+    }
+
+    cudaError_t assignSinVec(float *hostPtr, size_t len)
+    {
+        return cudaMemcpyToSymbol(sinVec, hostPtr, len);
+    }
+
+    cudaError_t assignCosVec(float *hostPtr, size_t len)
+    {
+        return cudaMemcpyToSymbol(cosVec, hostPtr, len);
     }
 
     void dataCopy(int steps, int rows, int cols, cufftComplex *complexData, float *floatData, int direction)
@@ -263,10 +251,12 @@ namespace cuda
         if (direction == COPY_C2R)
         {
             downloadFFTInOutDevice<<<gridSize, blockSize>>>(rows, cols, steps, complexData, floatData);
+            // CUDA_SYNC();
         }
         else if (direction == COPY_R2C)
         {
             assignFFTInOutDevice<<<gridSize, blockSize>>>(rows, cols, steps, complexData, floatData);
+            // CUDA_SYNC();
         }
     }
 
@@ -274,23 +264,28 @@ namespace cuda
     {
         int gridSize = (rows * cols * steps) / blockSize;
         assignFFTInOutDevice<<<gridSize, blockSize>>>(rows, cols, steps, fftInOut, dataPtr);
+        // CUDA_SYNC();
     }
 
     void executeFilter(int steps, int rows, int cols, cufftComplex *fftInOut, float *filter)
     {
         int gridSize = (rows * cols * steps) / blockSize;
         executeFilterDevice<<<gridSize, blockSize>>>(rows, cols, steps, fftInOut, filter);
+        // CUDA_SYNC();
     }
 
-    void computeProjectionWeights(int steps, int rows, int cols, int R, 
-        float *x, float *y, float *cosVec, float *sinVec, float *result)
+    void computeProjectionWeights(int steps, int rows, int cols, int R,
+                                  float *x, float *y, float *cosVec, float *sinVec, float *result)
     {
         int gridSize = (rows * cols * steps) / blockSize;
         computeProjectionWeightsDevice<<<gridSize, blockSize>>>(rows, cols, steps, R, x, y, cosVec, sinVec, result);
+        // CUDA_SYNC();
     }
 
     void drawColumns(int steps, int rows, int cols, int row, float *dst, float *src)
     {
+        nvtxRangePushA(__FUNCTION__);
+        nvtxRangePushA("drawColumns");
         int dist = rows * cols;
         int gridSize = (cols * cols * steps) / blockSize;
         float *startPtr = src + row * cols;
@@ -299,42 +294,43 @@ namespace cuda
         // std::cout << "src: " << src << " start: " << startPtr << " dst: " << dst << std::endl;
         // check(1, 1, cols, startPtr, checkStr);
         drawColumnsDevice<<<gridSize, blockSize>>>(rows, cols, steps, dist, dst, startPtr);
+        // CUDA_SYNC();
+        nvtxRangePop();
+        nvtxRangePop();
     }
 
-    // void rotate(int steps, int rows, int cols, int step, float *wasted, float *src, float *cosVec, float *sinVec)
-    // {
-    //     float *dst;
-    //     CUDA_CHECK(cudaMalloc((void **)&dst, sizeof(float) * rows * cols * steps));
-    //     float *startPtr = src + rows * cols * step;
-    //     rotateDevice<<<rows, cols>>>(rows, cols, steps, step, dst, startPtr, cosVec, sinVec);
-    //     cudaMemcpy((void *)startPtr, (void *)dst, rows * cols * sizeof(float), cudaMemcpyDeviceToDevice);
-    //     cudaFree(dst);
-    // }
-
-    void rotate(int steps, int rows, int cols, int step, float *src, float *cosVec, float *sinVec)
+    void rotate(int steps, int rows, int cols, int step, float *src, float *tmp)
     {
-        float *dst;
-        cudaMalloc((void **)&dst, sizeof(float) * rows * cols * steps);
+        nvtxRangePushA(__FUNCTION__);
+        nvtxRangePushA("rotate");
         int gridSize = (rows * cols * steps) / blockSize;
-        rotateDevice<<<gridSize, blockSize>>>(rows, cols, steps, dst, src, cosVec, sinVec);
-        cudaMemcpy((void *)src, (void *)dst, rows * cols * steps * sizeof(float), cudaMemcpyDeviceToDevice);
-        cudaFree(dst);
+        rotateDevice<<<gridSize, blockSize>>>(rows, cols, steps, tmp, src);
+        // CUDA_SYNC();
+        cudaMemcpy((void *)src, (void *)tmp, rows * cols * steps * sizeof(float), cudaMemcpyDeviceToDevice);
+        nvtxRangePop();
+        nvtxRangePop();
     }
 
     void generateSlice(int steps, int rows, int cols, float *dst, float *src)
     {
+        nvtxRangePushA(__FUNCTION__);
+        nvtxRangePushA("generateSlice");
         int gridSize = (cols * rows) / blockSize;
         generateSliceDevice<<<gridSize, blockSize>>>(rows, cols, steps, dst, src);
+        // CUDA_SYNC();
+        nvtxRangePop();
+        nvtxRangePop();
     }
 
-    void backprojection(int steps, int rows, int cols, int step, float dsize, float R, 
-        float *dst, float *src, float cosTheta, float sinTheta, int angles)
+    void backprojection(int steps, int rows, int cols, int step, float dsize, float R,
+                        float *dst, float *src, float cosTheta, float sinTheta, int angles)
     {
         Tensor count(rows, cols, steps);
         count.setZero();
         std::string checkText = "check count: " + std::to_string(step);
         float *startPtr = src + cols * rows * step;
         backprojectionDevice<<<rows * steps, cols>>>(rows, cols, steps, dsize, R, dst, startPtr, cosTheta, sinTheta, angles, count.getData());
+        // CUDA_SYNC();
         check(steps, rows, cols, count.getData(), checkText);
     }
 }

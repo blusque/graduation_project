@@ -30,4 +30,6 @@ namespace cuda
     void multiplyBroadcast(int rows, int cols, int steps, float *dataPtrL, float *dataPtrR, float *result);
 
     void divide(int rows, int cols, int steps, float *dataPtrL, float *dataPtrR, float *result);
+
+    void transposeFunc(int rows, int cols, int steps, float *src, float *dst, size_t dim0, size_t dim1);
 }
